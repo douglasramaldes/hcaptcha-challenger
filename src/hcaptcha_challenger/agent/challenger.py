@@ -47,6 +47,7 @@ from hcaptcha_challenger.tools import (
     SpatialPathReasoner,
     SpatialPointReasoner,
 )
+from hcaptcha_challenger.tools.internal.providers.protocol import ChatProvider
 
 
 def _generate_bezier_trajectory(
@@ -118,9 +119,19 @@ IGNORE_REQUEST_TYPE_LIST = List[SINGLE_IGNORE_TYPE]
 class AgentConfig(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_ignore_empty=True, extra="ignore")
 
-    GEMINI_API_KEY: SecretStr = Field(
-        default_factory=lambda: SecretStr(os.environ.get("GEMINI_API_KEY", "")),
+    GEMINI_API_KEY: SecretStr | None = Field(
+        default=None,
         description="Create API Key https://aistudio.google.com/app/apikey",
+    )
+
+    OPENROUTER_API_KEY: SecretStr | None = Field(
+        default=None,
+        description="Create API Key https://openrouter.ai/settings/keys",
+    )
+
+    OPENROUTER_MODEL: str = Field(
+        default="qwen/qwen3.6-plus:free",
+        description="OpenRouter model ID. Examples: qwen/qwen3.6-plus:free, google/gemma-4-26b-a4b-it",
     )
 
     cache_dir: Path = Path("tmp/.cache")
@@ -201,28 +212,66 @@ class AgentConfig(BaseSettings):
     )
     skills_update_branch: str = Field(default="main", description="GitHub branch for skills update")
 
-    @field_validator('GEMINI_API_KEY', mode="before")
+    @field_validator('GEMINI_API_KEY', 'OPENROUTER_API_KEY', mode="before")
     @classmethod
-    def validate_api_key(cls, v: Any) -> str:
+    def validate_api_key(cls, v: Any) -> Any:
+        if not v or (isinstance(v, str) and not v.strip()):
+            return None
+        return v
+
+    def build_provider(
+        self, gemini_model: str | None = None
+    ) -> ChatProvider:
         """
-        Validates that the GEMINI_API_KEY is not empty.
+        Escolhe o provedor de chat.
+
+        GEMINI_API_KEY tem prioridade sobre OPENROUTER_API_KEY. Assim, mesmo que o
+        shell exporte OPENROUTER_API_KEY (ex.: ~/.zshrc), o scraper usa Gemini
+        quando GEMINI_API_KEY estiver definida no .env.
+
+        Para forçar OpenRouter com as duas chaves no ambiente, defina
+        HCAPTCHA_AI_PROVIDER=openrouter.
 
         Args:
-            v: The API key value to validate
-
-        Returns:
-            The validated API key
-
-        Raises:
-            ValueError: If the API key is empty
+            gemini_model: Nome do modelo Gemini (só com GEMINI_API_KEY).
+                          Com OpenRouter, use OPENROUTER_MODEL.
         """
-        if not v or not isinstance(v, str):
-            raise ValueError(
-                "GEMINI_API_KEY is required but not provided. "
-                "Please either pass it directly or set the GEMINI_API_KEY environment variable."
-                "Create API Key -> https://aistudio.google.com/app/apikey"
+        force_or = (
+            os.environ.get("HCAPTCHA_AI_PROVIDER", "").strip().lower() == "openrouter"
+        )
+
+        if (
+            not force_or
+            and self.GEMINI_API_KEY
+            and self.GEMINI_API_KEY.get_secret_value().strip()
+        ):
+            from hcaptcha_challenger.tools.internal.providers.gemini import GeminiProvider
+
+            return GeminiProvider(
+                api_key=self.GEMINI_API_KEY.get_secret_value(),
+                model=gemini_model or self.CHALLENGE_CLASSIFIER_MODEL,
             )
-        return v
+
+        if self.OPENROUTER_API_KEY and self.OPENROUTER_API_KEY.get_secret_value().strip():
+            from hcaptcha_challenger.tools.internal.providers.openrouter import OpenRouterProvider
+
+            return OpenRouterProvider(
+                api_key=self.OPENROUTER_API_KEY.get_secret_value(),
+                model=self.OPENROUTER_MODEL,
+            )
+
+        if self.GEMINI_API_KEY and self.GEMINI_API_KEY.get_secret_value().strip():
+            from hcaptcha_challenger.tools.internal.providers.gemini import GeminiProvider
+
+            return GeminiProvider(
+                api_key=self.GEMINI_API_KEY.get_secret_value(),
+                model=gemini_model or self.CHALLENGE_CLASSIFIER_MODEL,
+            )
+
+        raise ValueError(
+            "No API key configured. Set GEMINI_API_KEY (https://aistudio.google.com/app/apikey) "
+            "or OPENROUTER_API_KEY (https://openrouter.ai)."
+        )
 
     @property
     def spatial_grid_cache(self):
@@ -285,21 +334,30 @@ class RoboticArm:
         self.config = config
         self._debug = config.enable_challenger_debug
 
+        _gemini_key = (
+            self.config.GEMINI_API_KEY.get_secret_value()
+            if self.config.GEMINI_API_KEY
+            else ""
+        )
         self._challenge_router = ChallengeRouter(
-            gemini_api_key=self.config.GEMINI_API_KEY.get_secret_value(),
+            gemini_api_key=_gemini_key,
             model=self.config.CHALLENGE_CLASSIFIER_MODEL,
+            provider=self.config.build_provider(self.config.CHALLENGE_CLASSIFIER_MODEL),
         )
         self._image_classifier = ImageClassifier(
-            gemini_api_key=self.config.GEMINI_API_KEY.get_secret_value(),
+            gemini_api_key=_gemini_key,
             model=self.config.IMAGE_CLASSIFIER_MODEL,
+            provider=self.config.build_provider(gemini_model=self.config.IMAGE_CLASSIFIER_MODEL),
         )
         self._spatial_path_reasoner = SpatialPathReasoner(
-            gemini_api_key=self.config.GEMINI_API_KEY.get_secret_value(),
+            gemini_api_key=_gemini_key,
             model=self.config.SPATIAL_PATH_REASONER_MODEL,
+            provider=self.config.build_provider(gemini_model=self.config.SPATIAL_PATH_REASONER_MODEL),
         )
         self._spatial_point_reasoner = SpatialPointReasoner(
-            gemini_api_key=self.config.GEMINI_API_KEY.get_secret_value(),
+            gemini_api_key=_gemini_key,
             model=self.config.SPATIAL_POINT_REASONER_MODEL,
+            provider=self.config.build_provider(gemini_model=self.config.SPATIAL_POINT_REASONER_MODEL),
         )
         self._skill_manager = SkillManager(agent_config=config)
         self.signal_crumb_count: int | None = None
