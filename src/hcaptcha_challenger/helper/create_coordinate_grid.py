@@ -1,5 +1,6 @@
+import math
 from pathlib import Path
-from typing import Union, TypedDict, Tuple, List
+from typing import Any, Union, TypedDict, Tuple, List
 
 import cv2
 import matplotlib.pyplot as plt
@@ -11,6 +12,37 @@ class FloatRect(TypedDict):
     y: float
     width: float
     height: float
+
+
+def _reshape_figure_rgba(fig: Any, flat: np.ndarray) -> np.ndarray:
+    """
+    buffer_rgba() uses physical pixels; get_width_height() defaults to logical size on HiDPI.
+    Use physical dimensions, with a fallback derived from buffer size + logical aspect ratio.
+    """
+    try:
+        w, h = fig.canvas.get_width_height(physical=True)
+    except TypeError:
+        w, h = fig.canvas.get_width_height()
+    if flat.size == w * h * 4:
+        return flat.reshape((h, w, 4))
+    try:
+        wl, hl = fig.canvas.get_width_height(physical=False)
+    except TypeError:
+        wl, hl = fig.canvas.get_width_height()
+    n = flat.size // 4
+    if wl > 0 and hl > 0:
+        w2 = int(round(math.sqrt(n * wl / hl)))
+        if w2 > 0:
+            h2 = n // w2
+            if w2 * h2 == n:
+                return flat.reshape((h2, w2, 4))
+    side = int(round(math.sqrt(n)))
+    if side * side * 4 == flat.size:
+        return flat.reshape((side, side, 4))
+    raise ValueError(
+        f"RGBA buffer size {flat.size} does not match any expected figure shape "
+        f"(logical {wl}x{hl}, physical attempt {w}x{h})"
+    )
 
 
 def _create_adaptive_contrast_grid(
@@ -109,7 +141,7 @@ def _create_adaptive_contrast_grid(
     # Get the RGBA buffer from the figure
     buf = fig.canvas.buffer_rgba()  # type: ignore[attr-defined]
     img_with_grid = np.frombuffer(buf, dtype=np.uint8)
-    img_with_grid = img_with_grid.reshape(fig.canvas.get_width_height()[::-1] + (4,))
+    img_with_grid = _reshape_figure_rgba(fig, img_with_grid)
 
     plt.close(fig)
 
@@ -220,7 +252,7 @@ def create_coordinate_grid(
     # Get the RGBA buffer from the figure
     buf = fig.canvas.buffer_rgba()  # type: ignore[attr-defined]
     img_with_grid = np.frombuffer(buf, dtype=np.uint8)
-    img_with_grid = img_with_grid.reshape(fig.canvas.get_width_height()[::-1] + (4,))
+    img_with_grid = _reshape_figure_rgba(fig, img_with_grid)
 
     # Close the figure to free memory
     plt.close(fig)

@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, FancyArrow
 from ..models import ImageAreaSelectChallenge, ImageDragDropChallenge, PointCoordinate, SpatialPath
-from .create_coordinate_grid import FloatRect
+from .create_coordinate_grid import FloatRect, _reshape_figure_rgba
 
 
 def show_answer_points(
@@ -104,7 +104,7 @@ def show_answer_points(
     fig.canvas.draw()
     buf = fig.canvas.buffer_rgba()  # type: ignore[arg-type]
     result_img = np.frombuffer(buf, dtype=np.uint8)
-    result_img = result_img.reshape(fig.canvas.get_width_height()[::-1] + (4,))
+    result_img = _reshape_figure_rgba(fig, result_img)
     result_img = cv2.cvtColor(result_img, cv2.COLOR_RGBA2RGB)
 
     plt.close(fig)
@@ -331,7 +331,7 @@ def create_comparison_view(
     fig.canvas.draw()
     buf = fig.canvas.buffer_rgba()  # type: ignore[arg-type]
     result_img = np.frombuffer(buf, dtype=np.uint8)
-    result_img = result_img.reshape(fig.canvas.get_width_height()[::-1] + (4,))
+    result_img = _reshape_figure_rgba(fig, result_img)
     result_img = cv2.cvtColor(result_img, cv2.COLOR_RGBA2RGB)
 
     plt.close(fig)
