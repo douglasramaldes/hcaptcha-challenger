@@ -134,6 +134,22 @@ class AgentConfig(BaseSettings):
         description="OpenRouter model ID. Examples: qwen/qwen3.6-plus:free, google/gemma-4-26b-a4b-it",
     )
 
+    DASHSCOPE_API_KEY: SecretStr | None = Field(
+        default=None,
+        description="Alibaba DashScope API Key (Model Studio). Force via HCAPTCHA_AI_PROVIDER=alibaba.",
+    )
+
+    DASHSCOPE_BASE_URL: str = Field(
+        default="https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+        description="DashScope OpenAI-compatible endpoint. US (Virginia) by default; "
+        "use https://dashscope-intl.aliyuncs.com/compatible-mode/v1 for Singapore.",
+    )
+
+    DASHSCOPE_MODEL: str = Field(
+        default="qwen3-vl-plus",
+        description="Qwen vision model on DashScope. Default qwen3-vl-plus (cheap, strong vision).",
+    )
+
     cache_dir: Path = Path("tmp/.cache")
     challenge_dir: Path = Path("tmp/.challenge")
     captcha_response_dir: Path = Path("tmp/.captcha")
@@ -212,7 +228,7 @@ class AgentConfig(BaseSettings):
     )
     skills_update_branch: str = Field(default="main", description="GitHub branch for skills update")
 
-    @field_validator('GEMINI_API_KEY', 'OPENROUTER_API_KEY', mode="before")
+    @field_validator('GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'DASHSCOPE_API_KEY', mode="before")
     @classmethod
     def validate_api_key(cls, v: Any) -> Any:
         if not v or (isinstance(v, str) and not v.strip()):
@@ -236,12 +252,26 @@ class AgentConfig(BaseSettings):
             gemini_model: Nome do modelo Gemini (só com GEMINI_API_KEY).
                           Com OpenRouter, use OPENROUTER_MODEL.
         """
-        force_or = (
-            os.environ.get("HCAPTCHA_AI_PROVIDER", "").strip().lower() == "openrouter"
-        )
+        provider_env = os.environ.get("HCAPTCHA_AI_PROVIDER", "").strip().lower()
+        force_or = provider_env == "openrouter"
+        force_alibaba = provider_env == "alibaba"
+
+        if (
+            force_alibaba
+            and self.DASHSCOPE_API_KEY
+            and self.DASHSCOPE_API_KEY.get_secret_value().strip()
+        ):
+            from hcaptcha_challenger.tools.internal.providers.alibaba import AlibabaProvider
+
+            return AlibabaProvider(
+                api_key=self.DASHSCOPE_API_KEY.get_secret_value(),
+                model=self.DASHSCOPE_MODEL,
+                base_url=self.DASHSCOPE_BASE_URL,
+            )
 
         if (
             not force_or
+            and not force_alibaba
             and self.GEMINI_API_KEY
             and self.GEMINI_API_KEY.get_secret_value().strip()
         ):
@@ -269,8 +299,9 @@ class AgentConfig(BaseSettings):
             )
 
         raise ValueError(
-            "No API key configured. Set GEMINI_API_KEY (https://aistudio.google.com/app/apikey) "
-            "or OPENROUTER_API_KEY (https://openrouter.ai)."
+            "No API key configured. Set GEMINI_API_KEY (https://aistudio.google.com/app/apikey), "
+            "OPENROUTER_API_KEY (https://openrouter.ai), "
+            "or DASHSCOPE_API_KEY (https://bailian.console.alibabacloud.com)."
         )
 
     @property
