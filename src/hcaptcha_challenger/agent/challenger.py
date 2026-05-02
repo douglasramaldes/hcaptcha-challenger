@@ -194,6 +194,12 @@ class AgentConfig(BaseSettings):
         default=1500,
         description="When your local network is poor, increase this value appropriately [unit: millisecond]",
     )
+    CHALLENGE_DOM_TIMEOUT_MS: int = Field(
+        default=55_000,
+        description=(
+            "Playwright timeout (ms) for challenge-view screenshot/bounding_box and loader opacity waits."
+        ),
+    )
 
     CHALLENGE_CLASSIFIER_MODEL: FastShotModelType = Field(
         default=DEFAULT_FAST_SHOT_MODEL,
@@ -541,7 +547,9 @@ class RoboticArm:
             challenge_view = frame_challenge.locator("//div[@class='challenge-view']")
             cache_path = self.config.cache_dir.joinpath(f"challenge_view/_artifacts/{uuid4()}.png")
             cache_path.parent.mkdir(parents=True, exist_ok=True)
-            await challenge_view.screenshot(type="png", path=cache_path)
+            await challenge_view.screenshot(
+                type="png", path=cache_path, timeout=self.config.CHALLENGE_DOM_TIMEOUT_MS
+            )
             router_result = await self._challenge_router(challenge_screenshot=cache_path)
             self._challenge_prompt = router_result.challenge_prompt
             return router_result.challenge_type
@@ -564,7 +572,9 @@ class RoboticArm:
             loader = loading_indicators.nth(i)
             try:
                 await expect(loader).to_have_attribute(
-                    "style", re.compile(r"opacity:\s*0"), timeout=30000
+                    "style",
+                    re.compile(r"opacity:\s*0"),
+                    timeout=self.config.CHALLENGE_DOM_TIMEOUT_MS,
                 )
                 await loading_indicators.nth(i).get_attribute("style")  # It cannot be removed
             except TimeoutError:
@@ -589,10 +599,11 @@ class RoboticArm:
         challenge_view = frame_challenge.locator("//div[@class='challenge-view']")
         challenge_screenshot = cache_key.joinpath(f"{cache_key.name}_{crumb_id}_challenge_view.png")
         challenge_screenshot.parent.mkdir(parents=True, exist_ok=True)
-        await challenge_view.screenshot(type="png", path=challenge_screenshot)
+        dom_ms = self.config.CHALLENGE_DOM_TIMEOUT_MS
+        await challenge_view.screenshot(type="png", path=challenge_screenshot, timeout=dom_ms)
 
         challenge_view = frame_challenge.locator("//div[@class='challenge-view']")
-        bbox = await challenge_view.bounding_box()
+        bbox = await challenge_view.bounding_box(timeout=dom_ms)
 
         # Save grid field
         result = create_coordinate_grid(
@@ -679,7 +690,9 @@ class RoboticArm:
             # Get challenge-view
             challenge_view = frame_challenge.locator("//div[@class='challenge-view']")
             challenge_screenshot = cache_key.joinpath(f"{cache_key.name}_{cid}_challenge_view.png")
-            await challenge_view.screenshot(type="png", path=challenge_screenshot)
+            await challenge_view.screenshot(
+                type="png", path=challenge_screenshot, timeout=self.config.CHALLENGE_DOM_TIMEOUT_MS
+            )
 
             # Image classification
             response = await self._image_classifier(challenge_screenshot=challenge_screenshot)
